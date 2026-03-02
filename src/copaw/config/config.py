@@ -20,6 +20,9 @@ class IMessageChannelConfig(BaseChannelConfig):
     db_path: str = "~/Library/Messages/chat.db"
     poll_sec: float = 1.0
     media_dir: str = "~/.copaw/media"
+    max_decoded_size: int = (
+        10 * 1024 * 1024
+    )  # 10MB default limit for Base64 data
 
 
 class DiscordConfig(BaseChannelConfig):

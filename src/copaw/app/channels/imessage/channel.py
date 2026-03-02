@@ -45,6 +45,7 @@ class IMessageChannel(BaseChannel):
         poll_sec: float,
         bot_prefix: str,
         media_dir: str = "~/.copaw/media",
+        max_decoded_size: int = 10 * 1024 * 1024,  # 10MB default
         on_reply_sent: OnReplySent = None,
         show_tool_details: bool = True,
     ):
@@ -61,6 +62,9 @@ class IMessageChannel(BaseChannel):
         # Create media directory for downloaded files
         self._media_dir = Path(media_dir).expanduser()
         self._media_dir.mkdir(parents=True, exist_ok=True)
+
+        # Base64 data size limit
+        self.max_decoded_size = max_decoded_size
 
         self._imsg_path: Optional[str] = None
         self._stop_event = threading.Event()
@@ -82,6 +86,9 @@ class IMessageChannel(BaseChannel):
             poll_sec=float(os.getenv("IMESSAGE_POLL_SEC", "1.0")),
             bot_prefix=os.getenv("IMESSAGE_BOT_PREFIX", "[BOT] "),
             media_dir=os.getenv("IMESSAGE_MEDIA_DIR", "~/.copaw/media"),
+            max_decoded_size=int(
+                os.getenv("IMESSAGE_MAX_DECODED_SIZE", "10485760"),
+            ),  # 10MB
             on_reply_sent=on_reply_sent,
         )
 
@@ -100,6 +107,7 @@ class IMessageChannel(BaseChannel):
             poll_sec=config.poll_sec,
             bot_prefix=config.bot_prefix or "[BOT] ",
             media_dir=config.media_dir or "~/.copaw/media",
+            max_decoded_size=config.max_decoded_size,
             on_reply_sent=on_reply_sent,
             show_tool_details=show_tool_details,
         )
@@ -317,10 +325,7 @@ ORDER BY m.ROWID ASC
             ):
                 media_parts.append(p)
 
-        body = "\n".join(text_parts) if text_parts else ""
-        prefix = (meta or {}).get("bot_prefix", "") or ""
-        if prefix and body:
-            body = prefix + body
+        body = (meta or {}).get("bot_prefix", "") + "\n".join(text_parts)
 
         # Send text message first (if any)
         if body.strip():
@@ -338,7 +343,8 @@ ORDER BY m.ROWID ASC
             except Exception as exc:
                 # Fallback: send a textual placeholder if media delivery fails
                 logger.warning(
-                    "imessage send_content_parts: send_media failed for %s: %s",
+                    "imessage send_content_parts: "
+                    "send_media failed for %s: %s",
                     getattr(media_part, "type", None),
                     exc,
                 )
@@ -359,7 +365,9 @@ ORDER BY m.ROWID ASC
                         "value",
                         getattr(media_part, "type", None),
                     )
-                    fallback_text = f"[File could not be sent ({content_type})]"
+                    fallback_text = (
+                        f"[File could not be sent ({content_type})]"
+                    )
                 await self.send(to_handle, fallback_text, meta)
 
     def _extract_url_and_filename(self, part: OutgoingContentPart):
@@ -409,6 +417,37 @@ ORDER BY m.ROWID ASC
         else:
             return ".bin"
 
+    def _sanitize_filename(self, filename: str) -> str:
+        """
+        Sanitize filename to prevent path traversal attacks.
+        - Extract basename only (remove any path components)
+        - Allow only alphanumeric characters, underscores, hyphens, and dots
+        - Replace invalid characters with underscores
+        - Ensure the result is not empty
+        """
+        # Extract basename to remove any path separators
+        basename = Path(filename).name
+
+        # If basename is empty (e.g., filename was just a path
+        # separator), use default
+        if not basename:
+            return "media_file"
+
+        # Allow only safe characters: alphanumeric, underscore, hyphen, dot
+        import re
+
+        sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", basename)
+
+        # Ensure it doesn't start or end with dots or hyphens
+        # (which could be problematic)
+        sanitized = sanitized.strip("._-")
+
+        # If after sanitization it's empty, use default
+        if not sanitized:
+            return "media_file"
+
+        return sanitized
+
     async def _handle_local_file(self, url: str) -> Optional[str]:
         """Handle local file paths."""
         local_path = file_url_to_local_path(url)
@@ -437,12 +476,24 @@ ORDER BY m.ROWID ASC
         try:
             url_hash = hashlib.md5(url.encode()).hexdigest()[:16]
             ext = self._get_file_extension(content_type, filename_hint)
-            safe_filename = f"{filename_hint}_{url_hash}{ext}"
+            safe_basename = self._sanitize_filename(filename_hint)
+            safe_filename = f"{safe_basename}_{url_hash}{ext}"
             local_path = await download_file_from_url(
                 url,
                 filename=safe_filename,
                 download_dir=str(self._media_dir),
             )
+            # Verify the resolved path is within _media_dir
+            # to prevent path traversal
+            resolved_path = Path(local_path).resolve()
+            media_dir_resolved = self._media_dir.resolve()
+            if not str(resolved_path).startswith(str(media_dir_resolved)):
+                logger.error(
+                    "imessage send_media: attempted path traversal detected, "
+                    f"blocked file creation at {resolved_path}",
+                )
+                return None
+
             logger.info(
                 f"imessage send_media: downloaded {url} to {local_path}",
             )
@@ -470,11 +521,61 @@ ORDER BY m.ROWID ASC
                 else:
                     ext = ".bin"
 
+                # Add validation and size limits for base64 data
+                MAX_DECODED_SIZE = self.max_decoded_size
+
+                # Validate base64 format and get decoded size
+                # without full decode
+                try:
+                    # Get approximate decoded size: (n*3)/4 where n
+                    # is length of base64 string
+                    b64_length = len(b64_data)
+                    # Remove padding for calculation
+                    padding = b64_data.count("=", -2)
+                    approx_decoded_size = (b64_length * 3) // 4 - padding
+
+                    if approx_decoded_size > MAX_DECODED_SIZE:
+                        logger.warning(
+                            "imessage send_media: base64 data too large "
+                            f"({approx_decoded_size} bytes > "
+                            f"{MAX_DECODED_SIZE} bytes limit)",
+                        )
+                        return None
+
+                    # Validate and decode with proper error handling
+                    file_data = base64.b64decode(b64_data, validate=True)
+
+                    if len(file_data) > MAX_DECODED_SIZE:
+                        logger.warning(
+                            "imessage send_media: decoded data too large "
+                            f"({len(file_data)} bytes > {MAX_DECODED_SIZE} "
+                            "bytes limit)",
+                        )
+                        return None
+
+                except Exception as e:
+                    logger.error(
+                        f"imessage send_media: invalid base64 data: {e}",
+                    )
+                    return None
+
                 url_hash = hashlib.md5(b64_data.encode()).hexdigest()[:16]
-                safe_filename = f"{filename_hint}_{url_hash}{ext}"
+                safe_basename = self._sanitize_filename(filename_hint)
+                safe_filename = f"{safe_basename}_{url_hash}{ext}"
                 local_path = str(self._media_dir / safe_filename)
 
-                file_data = base64.b64decode(b64_data)
+                # Verify the resolved path is within _media_dir
+                # to prevent path traversal
+                resolved_path = Path(local_path).resolve()
+                media_dir_resolved = self._media_dir.resolve()
+                if not str(resolved_path).startswith(str(media_dir_resolved)):
+                    logger.error(
+                        "imessage send_media: attempted path traversal "
+                        "detected, "
+                        f"blocked file creation at {resolved_path}",
+                    )
+                    return None
+
                 Path(local_path).write_bytes(file_data)
                 logger.info(
                     f"imessage send_media: saved base64 data to {local_path}",
