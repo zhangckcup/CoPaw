@@ -15,7 +15,7 @@
 [![Discord](https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord)](https://discord.gg/eYMpfnkG8h)
 [![钉钉群](https://img.shields.io/badge/DingTalk-Join_Us-orange.svg)](https://qr.dingtalk.com/action/joingroup?code=v1,k1,OmDlBXpjW+I2vWjKDsjvI9dhcXjGZi3bQiojOq3dlDw=&_dt_no_comment=1&origin=11)
 
-[[文档](https://copaw.agentscope.io/)] [[English](README.md)]
+[[文档](https://copaw.agentscope.io/)] [[English](README.md)] [[日本語](README_ja.md)]
 
 <p align="center">
   <img src="https://img.alicdn.com/imgextra/i1/O1CN01tvT5rg1JHQNRP8tXR_!!6000000001003-2-tps-1632-384.png" alt="CoPaw Logo" width="120">
@@ -51,6 +51,18 @@
 
 ---
 
+## 新闻
+
+[2026-03-02] 我们发布了 v0.0.4！完整更新说明见 [v0.0.4 发布说明](https://github.com/agentscope-ai/CoPaw/releases/tag/v0.0.4)。
+
+- **[v0.0.4]** **FEAT：** Telegram 频道；OpenAI 与 Azure OpenAI 作为内置模型提供商；Ollama SDK；coding-plan 提供商；模型连接测试；心跳监控面板；CORS 配置；钉钉与飞书支持音频文件。
+- **[v0.0.4]** **FEAT：** 基于 token 的记忆压缩；文件块处理；嵌入配置；tool_choice 行为统一。
+- **[v0.0.4]** **BUGFIX：** Windows 路径；空 tool call 处理；控制台工作区 UI；Ollama URL 与连通性；MCP 传输；浏览器资源占用；静态资源 MIME 类型；API 请求头；Playwright Docker；心跳解析；纯媒体消息排队。
+- **[v0.0.4]** **RELS：** 安装脚本（含 PowerShell）；Docker 指南；频道 CLI 文档；飞书 SOCKS 代理；MCP 与运行时文档；FAQ（中/英）；Skill 编写指南；CONTRIBUTING；控制台文档；网站优化。
+- **[v0.0.4]** **COMM：** 感谢新贡献者：[@ekzhu](https://github.com/ekzhu)、[@fancyboi999](https://github.com/fancyboi999)、[@zhaozhuang521](https://github.com/zhaozhuang521)、[@hobostay](https://github.com/hobostay)、[@dhbxs](https://github.com/dhbxs)、[@longway-code](https://github.com/longway-code)、[@ydlstartx](https://github.com/ydlstartx)、[@LudovicoYIN](https://github.com/LudovicoYIN)、[@fenixc9](https://github.com/fenixc9)、[@dittotang](https://github.com/dittotang)、[@forestxieCode](https://github.com/forestxieCode)、[@yongtenglei](https://github.com/yongtenglei)、[@kerwin612](https://github.com/kerwin612)、[@luixiao0](https://github.com/luixiao0)、[@gongpx20069](https://github.com/gongpx20069)。
+
+---
+
 ## 目录
 
 > **推荐阅读：**
@@ -59,10 +71,14 @@
 > - **我想在钉钉 / 飞书 / QQ 里聊**： [快速开始](#快速开始) → [频道配置](https://copaw.agentscope.io/docs/channels)。
 > - **我不想装 Python**：[一键安装](#一键安装beta持续完善中) 自动管理 Python，或使用 [魔搭一键配置](https://modelscope.cn/studios/fork?target=AgentScope/CoPaw) 云端部署。
 
+- [新闻](#新闻)
 - [快速开始](#快速开始)
 - [API Key](#api-key)
 - [本地模型](#本地模型)
 - [文档](#文档)
+- [常见问题](#常见问题)
+- [路线图](#路线图)
+- [参与贡献](#参与贡献)
 - [从源码安装](#从源码安装)
 - [为什么叫 CoPaw？](#为什么叫-copaw)
 - [由谁构建](#由谁构建)
@@ -108,13 +124,44 @@ curl -fsSL https://copaw.agentscope.io/install.sh | bash -s -- --extras ollama
 curl -fsSL https://copaw.agentscope.io/install.sh | bash -s -- --extras ollama,llamacpp
 ```
 
+**Windows (CMD):**
+
+```CMD
+curl -fsSL https://copaw.agentscope.io/install.bat -o install.bat && install.bat
+```
+
 **Windows（PowerShell）：**
 
 ```powershell
 irm https://copaw.agentscope.io/install.ps1 | iex
 ```
 
-然后打开新终端并运行：
+> **注意**：安装程序将自动检查 uv 状态，若未安装则尝试自动下载配置。如遇自动安装失败，请遵循屏幕提示操作，或执行 `python -m pip install -U uv`，然后重新运行安装程序。
+
+> **⚠️ Windows 企业版 LTSC 用户特别提示**
+>
+> 如果您使用的是 Windows LTSC 或受严格安全策略管控的企业环境，PowerShell 可能运行在 **受限语言模式** 下，可能会遇到以下问题：
+> 1. **如果你使用的是 CMD（.bat）：脚本执行成功但无法写入`Path`**
+>
+>    脚本已完成文件安装，由于 **受限语言模式** ，脚本无法自动写入环境变量，此时只需手动配置：
+>    - **找到安装目录**：
+>      - 检查 `uv` 是否可用：在 CMD 中输入 `uv --version` ，如果显示版本号，则**只需配置 CoPaw 路径**；如果提示 `'uv' 不是内部或外部命令，也不是可运行的程序或批处理文件。`，则需同时配置两者。
+>      - uv路径（任选其一，取决于安装位置，若`uv`不可用则填）：通常在`%USERPROFILE%\.local\bin`、`%USERPROFILE%\AppData\Local\uv`或 Python 安装目录下的 `Scripts` 文件夹
+>      - CoPaw路径：通常在 `%USERPROFILE%\.copaw\bin` 。
+>    - **手动添加到系统的 Path 环境变量**：
+>      - 按 `Win + R`，输入 `sysdm.cpl` 并回车，打开“系统属性”。
+>      - 点击 “高级” -> “环境变量”。
+>      - 在 “系统变量” 中找到并选中 `Path`，点击 “编辑”。
+>      - 点击 “新建”，依次填入上述两个目录路径，点击确定保存。
+> 2. **如果你使用的是 PowerShell（.ps1）：脚本运行中断**
+>
+>   由于 **受限语言模式** ，脚本可能无法自动下载`uv`。
+>   - **手动安装uv**：参考 [GitHub Release](https://github.com/astral-sh/uv/releases)下载并将`uv.exe`放至`%USERPROFILE%\.local\bin`或`%USERPROFILE%\AppData\Local\uv`；或者确保已安装 Python ，然后运行`python -m pip install -U uv`
+>   - **配置`uv`环境变量**：将`uv`所在目录和 `%USERPROFILE%\.copaw\bin` 添加到系统的 `Path` 变量中。
+>   - **重新运行**：打开新终端，再次执行安装脚本以完成 `CoPaw` 安装。
+>   - **配置`CoPaw`环境变量**：将 `%USERPROFILE%\.copaw\bin` 添加到系统的 `Path` 变量中。
+
+安装完成后，请打开新终端并运行：
 
 ```bash
 copaw init --defaults   # 或：copaw init（交互式）
@@ -250,6 +297,52 @@ copaw app # 启动服务
 | [配置与工作目录](https://copaw.agentscope.io/docs/config) | 工作目录与配置文件                   |
 
 完整文档见本仓库 [website/public/docs/](website/public/docs/)。
+
+---
+
+## 常见问题
+
+常见问题、排错指南与已知问题，请访问 **[FAQ 页面](https://copaw.agentscope.io/docs/faq)**。
+
+---
+
+## 路线图
+
+| 方向 | 事项 | 状态 |
+| --- | --- | --- |
+| 横向拓展 | 更多频道、模型、Skills、MCP 等 — **欢迎社区贡献** | 征集中 |
+| 已有功能扩展与完善 | 展示优化、下载提示、Windows 路径兼容等 — **欢迎社区贡献** | 征集中 |
+| 兼容性与易用性 | 应用级打包（DMG、EXE） | 进行中 |
+| | 一键部署：内置依赖、dev 扩展、安装/升级教程 | 进行中 |
+| 版本发布与贡献规范 | 贡献文档与测试框架 | 进行中 |
+| | 对社区贡献的积极响应 | 进行中 |
+| | Vibe Coding 等 Agent 的贡献引导 | 计划中 |
+| Bug 修复与功能增强 | 消息折叠/隐藏 | 计划中 |
+| | Skills 与 MCP 运行时安装、热加载改进 | 计划中 |
+| | 上下文管理与压缩（长工具返回、降低 token 消耗） | 计划中 |
+| | 多模态支持 | 进行中 |
+| 安全 | Shell 执行确认 | 计划中 |
+| | 工具/Skills 安全性 | 计划中 |
+| | 可配置安全等级 | 计划中 |
+| 多模态 | 语音/视频通话与实时交互 | 长期规划 |
+| 多智能体 | 基于 [AgentScope](https://github.com/agentscope-ai/agentscope)，原生支持多智能体协作 | 长期规划 |
+| 沙箱 | 与 AgentScope Runtime 沙箱深度集成 | 长期规划 |
+| 自愈 | 守护进程 Agent，实现自动恢复与健康监控 | 长期规划 |
+| CoPaw 优化本地模型 | 针对 CoPaw 原生 Skills 与常见任务调优的本地模型，提升个人助理可用性 | 长期规划 |
+| 大小模型协同 | 本地模型处理敏感数据，云端模型负责规划与编码；兼顾隐私、性能与能力 | 长期规划 |
+| 云原生 | 与 AgentScope Runtime 深度集成，充分利用云端算力、存储与工具生态 | 长期规划 |
+| Skills 生态 | 丰富 [AgentScope Skills](https://github.com/agentscope-ai/agentscope-skills) 仓库，提升优质 Skill 的发现与使用 | 长期规划 |
+
+*状态说明：进行中 — 正在推进；计划中 — 已排期或设计中，也**欢迎贡献**；**征集中** — 我们**非常欢迎**社区参与；长期规划 — 中长期路线。*
+
+### 参与贡献
+
+CoPaw 在开放协作中持续演进，欢迎各种形式的参与！请参考上方 [路线图](#路线图)（尤其是标记为 **征集中** 的项）选择你感兴趣的方向，并阅读 [CONTRIBUTING](https://github.com/agentscope-ai/CoPaw/blob/main/CONTRIBUTING_zh.md) 了解如何开始。我们特别欢迎：
+
+- **横向拓展** — 新频道、模型提供商、Skills、MCP。
+- **已有功能扩展与完善** — 展示与交互优化、下载提示、Windows 路径兼容等。
+
+欢迎在 [GitHub Discussions](https://github.com/agentscope-ai/CoPaw/discussions) 参与讨论、提出想法或认领任务。
 
 ---
 
