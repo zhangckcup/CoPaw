@@ -534,7 +534,15 @@ class FeishuChannel(BaseChannel):
                     text_parts.append(text)
             elif msg_type == "post":
                 # Handle rich text post messages
-                text_parts.extend(self._extract_text_from_post(content_raw))
+                (
+                    post_text_parts,
+                    post_content_parts,
+                ) = await self._extract_content_from_post(
+                    message_id,
+                    content_raw,
+                )
+                text_parts.extend(post_text_parts)
+                content_parts.extend(post_content_parts)
             elif msg_type == "image":
                 image_key = extract_json_key(
                     content_raw,
@@ -704,12 +712,13 @@ class FeishuChannel(BaseChannel):
     ) -> List[str]:  # pylint: disable=too-many-nested-blocks
         """Extract text content from Feishu post message format.
 
-        Post format example:
+        Post format example (actual format from logs):
         {
-            "zh_cn": {
-                "title": "...",
-                "content": [[{"tag": "text", "text": "..."}]]
-            }
+            "title": "",
+            "content": [
+                [{"tag": "img", "image_key": "..."}],
+                [{"tag": "text", "text": "..."}]
+            ]
         }
 
         Returns list of text parts extracted from the post.
@@ -722,16 +731,12 @@ class FeishuChannel(BaseChannel):
 
             post_text_parts = []
 
-            # Get content from any language key (zh_cn, en_us, etc.)
-            for lang_content in post_content.values():
-                if not isinstance(lang_content, dict):
-                    continue
-                if "content" not in lang_content:
-                    continue
-
-                content_rows = lang_content["content"]
+            # Handle actual post format (no language wrapper)
+            # Check if this is the direct format with title and content
+            if "content" in post_content:
+                content_rows = post_content["content"]
                 if not isinstance(content_rows, list):
-                    continue
+                    return ["[post: invalid content format]"]
 
                 for row in content_rows:
                     if not isinstance(row, list):
@@ -753,6 +758,38 @@ class FeishuChannel(BaseChannel):
                                 post_text_parts.append(f"@{user_name}")
                         # Add more tag types as needed
 
+            # Also handle legacy format with language keys (zh_cn, en_us, etc.)
+            else:
+                for lang_content in post_content.values():
+                    if not isinstance(lang_content, dict):
+                        continue
+                    if "content" not in lang_content:
+                        continue
+
+                    content_rows = lang_content["content"]
+                    if not isinstance(content_rows, list):
+                        continue
+
+                    for row in content_rows:
+                        if not isinstance(row, list):
+                            continue
+                        for element in row:
+                            if not isinstance(element, dict):
+                                continue
+
+                            # Handle different tag types
+                            tag = element.get("tag")
+                            if tag == "text":
+                                post_text_parts.append(element.get("text", ""))
+                            elif tag == "md":
+                                post_text_parts.append(element.get("text", ""))
+                            elif tag == "at":
+                                # Handle @ mentions
+                                user_name = element.get("user_name", "")
+                                if user_name:
+                                    post_text_parts.append(f"@{user_name}")
+                            # Add more tag types as needed
+
             if post_text_parts:
                 return ["\n".join(post_text_parts)]
             else:
@@ -770,6 +807,230 @@ class FeishuChannel(BaseChannel):
                 truncated_content,
             )
             return ["[post: parse error]"]
+
+    async def _extract_content_from_post(
+        self,
+        message_id: str,
+        content_raw: str,
+    ) -> Tuple[List[str], List[Any]]:
+        """Extract both text and image content from Feishu post message format.
+
+        Returns tuple of (text_parts, content_parts).
+        """
+        # pylint: disable=too-many-nested-blocks
+        try:
+            post_content = json.loads(content_raw)
+            if not isinstance(post_content, dict):
+                return ["[post: invalid content format]"], []
+
+            text_parts = []
+            content_parts = []
+
+            # Handle actual post format (no language wrapper)
+            # Check if this is the direct format with title and content
+            if "content" in post_content:
+                content_rows = post_content["content"]
+                if not isinstance(content_rows, list):
+                    return ["[post: invalid content format]"], []
+
+                for row in content_rows:
+                    if not isinstance(row, list):
+                        continue
+                    for element in row:
+                        if not isinstance(element, dict):
+                            continue
+
+                        # Handle different tag types
+                        tag = element.get("tag")
+                        if tag == "text":
+                            text = element.get("text", "")
+                            text_parts.append(text)
+                            content_parts.append(
+                                TextContent(
+                                    type=ContentType.TEXT,
+                                    text=text,
+                                ),
+                            )
+                        elif tag == "md":
+                            text = element.get("text", "")
+                            text_parts.append(text)
+                            content_parts.append(
+                                TextContent(
+                                    type=ContentType.TEXT,
+                                    text=text,
+                                ),
+                            )
+                        elif tag == "at":
+                            # Handle @ mentions
+                            user_name = element.get("user_name", "")
+                            mention_text = (
+                                f"@{user_name}" if user_name else "@unknown"
+                            )
+                            text_parts.append(mention_text)
+                            content_parts.append(
+                                TextContent(
+                                    type=ContentType.TEXT,
+                                    text=mention_text,
+                                ),
+                            )
+                        elif tag == "img":
+                            # Handle images in post
+                            image_key = element.get("image_key")
+                            if image_key:
+                                url_or_path = (
+                                    await self._download_image_resource(
+                                        message_id,
+                                        image_key,
+                                    )
+                                )
+                                if url_or_path:
+                                    image_content = ImageContent(
+                                        type=ContentType.IMAGE,
+                                        image_url=url_or_path,
+                                    )
+                                    content_parts.append(image_content)
+                                    # Don't add to text_parts for images
+                                else:
+                                    error_text = "[image: download failed]"
+                                    text_parts.append(error_text)
+                                    content_parts.append(
+                                        TextContent(
+                                            type=ContentType.TEXT,
+                                            text=error_text,
+                                        ),
+                                    )
+                            else:
+                                error_text = "[image: missing key]"
+                                text_parts.append(error_text)
+                                content_parts.append(
+                                    TextContent(
+                                        type=ContentType.TEXT,
+                                        text=error_text,
+                                    ),
+                                )
+                        # Add more tag types as needed
+
+            # Also handle legacy format with language keys (zh_cn, en_us, etc.)
+            else:
+                for lang_content in post_content.values():
+                    if not isinstance(lang_content, dict):
+                        continue
+                    if "content" not in lang_content:
+                        continue
+
+                    content_rows = lang_content["content"]
+                    if not isinstance(content_rows, list):
+                        continue
+
+                    for row in content_rows:
+                        if not isinstance(row, list):
+                            continue
+                        for element in row:
+                            if not isinstance(element, dict):
+                                continue
+
+                            # Handle different tag types
+                            tag = element.get("tag")
+                            if tag == "text":
+                                text = element.get("text", "")
+                                text_parts.append(text)
+                                content_parts.append(
+                                    TextContent(
+                                        type=ContentType.TEXT,
+                                        text=text,
+                                    ),
+                                )
+                            elif tag == "md":
+                                text = element.get("text", "")
+                                text_parts.append(text)
+                                content_parts.append(
+                                    TextContent(
+                                        type=ContentType.TEXT,
+                                        text=text,
+                                    ),
+                                )
+                            elif tag == "at":
+                                # Handle @ mentions
+                                user_name = element.get("user_name", "")
+                                mention_text = (
+                                    f"@{user_name}"
+                                    if user_name
+                                    else "@unknown"
+                                )
+                                text_parts.append(mention_text)
+                                content_parts.append(
+                                    TextContent(
+                                        type=ContentType.TEXT,
+                                        text=mention_text,
+                                    ),
+                                )
+                            elif tag == "img":
+                                # Handle images in post
+                                image_key = element.get("image_key")
+                                if image_key:
+                                    url_or_path = (
+                                        await self._download_image_resource(
+                                            message_id,
+                                            image_key,
+                                        )
+                                    )
+                                    if url_or_path:
+                                        image_content = ImageContent(
+                                            type=ContentType.IMAGE,
+                                            image_url=url_or_path,
+                                        )
+                                        content_parts.append(image_content)
+                                        # Don't add to text_parts for images
+                                    else:
+                                        error_text = "[image: download failed]"
+                                        text_parts.append(error_text)
+                                        content_parts.append(
+                                            TextContent(
+                                                type=ContentType.TEXT,
+                                                text=error_text,
+                                            ),
+                                        )
+                                else:
+                                    error_text = "[image: missing key]"
+                                    text_parts.append(error_text)
+                                    content_parts.append(
+                                        TextContent(
+                                            type=ContentType.TEXT,
+                                            text=error_text,
+                                        ),
+                                    )
+                            # Add more tag types as needed
+
+            if not text_parts and not content_parts:
+                error_text = "[post: no content]"
+                text_parts = [error_text]
+                content_parts = [
+                    TextContent(
+                        type=ContentType.TEXT,
+                        text=error_text,
+                    ),
+                ]
+
+            return text_parts, content_parts
+
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            # Truncate content for logging to avoid excessive log length
+            if isinstance(content_raw, str):
+                truncated_content = content_raw[:100]
+            else:
+                truncated_content = str(content_raw)[:100]
+            logger.debug(
+                "feishu post message parsing failed: %s, content=%s",
+                e,
+                truncated_content,
+            )
+            error_text = "[post: parse error]"
+            return [error_text], [
+                TextContent(
+                    type=ContentType.TEXT,
+                    text=error_text,
+                ),
+            ]
 
     async def _download_image_resource(
         self,
