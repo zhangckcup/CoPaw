@@ -532,6 +532,9 @@ class FeishuChannel(BaseChannel):
                 text = extract_json_key(content_raw, "text")
                 if text:
                     text_parts.append(text)
+            elif msg_type == "post":
+                # Handle rich text post messages
+                text_parts.extend(self._extract_text_from_post(content_raw))
             elif msg_type == "image":
                 image_key = extract_json_key(
                     content_raw,
@@ -694,6 +697,79 @@ class FeishuChannel(BaseChannel):
                 )
         except Exception as e:
             logger.debug("feishu reaction error: %s", e)
+
+    def _extract_text_from_post(
+        self,
+        content_raw: str,
+    ) -> List[str]:  # pylint: disable=too-many-nested-blocks
+        """Extract text content from Feishu post message format.
+
+        Post format example:
+        {
+            "zh_cn": {
+                "title": "...",
+                "content": [[{"tag": "text", "text": "..."}]]
+            }
+        }
+
+        Returns list of text parts extracted from the post.
+        """
+        # pylint: disable=too-many-nested-blocks
+        try:
+            post_content = json.loads(content_raw)
+            if not isinstance(post_content, dict):
+                return ["[post: invalid content format]"]
+
+            post_text_parts = []
+
+            # Get content from any language key (zh_cn, en_us, etc.)
+            for lang_content in post_content.values():
+                if not isinstance(lang_content, dict):
+                    continue
+                if "content" not in lang_content:
+                    continue
+
+                content_rows = lang_content["content"]
+                if not isinstance(content_rows, list):
+                    continue
+
+                for row in content_rows:
+                    if not isinstance(row, list):
+                        continue
+                    for element in row:
+                        if not isinstance(element, dict):
+                            continue
+
+                        # Handle different tag types
+                        tag = element.get("tag")
+                        if tag == "text":
+                            post_text_parts.append(element.get("text", ""))
+                        elif tag == "md":
+                            post_text_parts.append(element.get("text", ""))
+                        elif tag == "at":
+                            # Handle @ mentions
+                            user_name = element.get("user_name", "")
+                            if user_name:
+                                post_text_parts.append(f"@{user_name}")
+                        # Add more tag types as needed
+
+            if post_text_parts:
+                return ["\n".join(post_text_parts)]
+            else:
+                return ["[post: no text content]"]
+
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            # Truncate content for logging to avoid excessive log length
+            if isinstance(content_raw, str):
+                truncated_content = content_raw[:100]
+            else:
+                truncated_content = str(content_raw)[:100]
+            logger.debug(
+                "feishu post message parsing failed: %s, content=%s",
+                e,
+                truncated_content,
+            )
+            return ["[post: parse error]"]
 
     async def _download_image_resource(
         self,
@@ -1411,10 +1487,14 @@ class FeishuChannel(BaseChannel):
         media_parts: List[OutgoingContentPart] = []
         for p in parts:
             t = getattr(p, "type", None)
-            if t == ContentType.TEXT and getattr(p, "text", None):
-                text_parts.append(p.text or "")
-            elif t == ContentType.REFUSAL and getattr(p, "refusal", None):
-                text_parts.append(p.refusal or "")
+            if t == ContentType.TEXT:
+                text_val = getattr(p, "text", None)
+                if text_val:
+                    text_parts.append(text_val)
+            elif t == ContentType.REFUSAL:
+                refusal_val = getattr(p, "refusal", None)
+                if refusal_val:
+                    text_parts.append(refusal_val)
             elif t in (
                 ContentType.IMAGE,
                 ContentType.FILE,
